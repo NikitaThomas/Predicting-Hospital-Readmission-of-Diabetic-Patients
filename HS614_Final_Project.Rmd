@@ -1,0 +1,414 @@
+---
+title: "HS 614 Final Project"
+author: "Nikita Thomas"
+date: "May 16, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First loaded the data into my local environment and converted the question marks to NA values for further analysis. 
+```{r}
+setwd("~/Desktop/HS_614/HS614_final_project/dataset_diabetes")
+set.seed(300)
+raw_data<- read.csv("diabetic_data.csv", na.strings = "?") #keep for later 
+data <- read.csv("diabetic_data.csv", na.strings = "?")
+head(data[, 1:6]) #Check if ?s were converted into NA values 
+```
+
+Download the following R packages. 
+```{r}
+require(caret)
+require(ggplot2)
+require(dplyr)
+require(randomForest)
+require(corrplot)
+require(e1071)
+require(dummies)
+require(amap)
+require(factoextra)
+require(heatmap3)
+require(pROC)
+```
+
+## Data Cleaning/ Exploration
+
+Begin Data Cleaning process. We decided to take the readmitted column as our class predictor. The final model will be one that predicts whether a patient will be readmitted or not.  
+```{r}
+colnames(data)
+table(data$readmitted)#checking to see how I should categorize my predictor variable
+
+```
+Decided to do readmission (<30 and <30 combined) versus no readmission as the number of observations are close to equal (50/50)
+
+Next, I created a new column called Classifier that set patients who weren't readmitted to 0 and those that were(regardless of the number of days) as 1. 
+```{r}
+sum(is.na(data$readmitted))
+data['classifier'] <- NA
+populate <- function(data){
+  for (n in 1:nrow(data)){
+    x <- data$readmitted[n]
+    if(x == 'NO'){
+      data$classifier[n]<<- 0
+    }else {
+      data$classifier[n]<<- 1
+    }
+  }
+}
+populate(data)
+data$classifier<- as.factor(data$classifier)
+data<- data[ , -which(names(data) %in% "readmitted")]
+```
+
+I then removed the unique identifiers in this dataset as it will not be of any use in the data analysis. 
+```{r}
+uniqID<- c("encounter_id", "patient_nbr")
+data<- data[ , -which(names(data) %in% uniqID)]
+colnames(data) #check to see if they were properly dropped 
+
+```
+
+Checked the number of missing values in the dataset for each feature: 
+```{r}
+missing_vals<- function(){
+  for (i in names(data)){
+    num<- sum(is.na(data[i]))
+    den<- 101766
+    percentage <- num/den
+    print(c(names(data[i]), percentage))
+  }
+}
+missing_vals()
+
+```
+
+
+Decided to drop all the columns with greater than a third as NA values. I had originally dropped the rows with NAs before dropping these three columns which reduced the data set quite a bit therefore losing potentially important data. Instead I decided to drop the columns with high NA values first and then the rows with remaining NAs. 
+```{r}
+# Drop columns with NAs > 1/3 
+highNAs<- c("weight", "payer_code", "medical_specialty" )
+data<- data[ , -which(names(data) %in% highNAs)]
+colnames(data) #check to see if they were properly dropped 
+
+# Omit all NAs now 
+data <- na.omit(data)
+
+## Checking all data types 
+str(data) #view the number of levels each variable has 
+
+```
+
+Since each diagnosis column had large levels, we decided to group them based on ICD-9 codes. 
+```{r}
+data['D1'] <- NA
+data['D2'] <- NA
+data['D3'] <- NA
+data$diag_1<- as.numeric(data$diag_1)
+populate1 <- function(data){
+  for (n in 1:nrow(data)){
+    x<- data$diag_1[n]
+    if (390<=x && x<=459 || x == 785 ){
+      data$D1[n]<<- 'circulatory'
+    }else if (460<=x && x<=519 || x == 786 ){
+      data$D1[n]<<- 'respiratory'
+    }else if (520<=x && x<=579 || x == 787 ){
+      data$D1[n]<<- 'digestive'
+    }else if (250<=x && x<251){
+      data$D1[n]<<- 'diabetes'
+    }else if (800<=x && x<=999){
+      data$D1[n]<<- 'injury'
+    }else if (710<=x && x<=739){
+      data$D1[n]<<- 'musculoskeletal'
+    }else if (580<=x && x<=629 || x == 788){
+      data$D1[n]<<- 'genitourinary'
+    }else if (140<=x && x<=239){
+      data$D1[n]<<- 'neoplasms'
+    }else {
+      data$D1[n]<<- 'other'
+    }
+  }
+}
+data$diag_2<- as.numeric(data$diag_2)
+populate2 <- function(data){
+  for (n in 1:nrow(data)){
+    x<- data$diag_2[n]
+    if (390<=x && x<=459 | x == 785 ){
+      data$D2[n]<<- 'circulatory'
+    }else if (460<=x && x<=519 | x == 786 ){
+      data$D2[n]<<- 'respiratory'
+    }else if (520<=x && x<=579 | x == 787 ){
+      data$D2[n]<<- 'digestive'
+    }else if (250<=x && x<251){
+      data$D2[n]<<- 'diabetes'
+    }else if (800<=x && x<=999){
+      data$D2[n]<<- 'injury'
+    }else if (710<=x && x<=739){
+      data$D2[n]<<- 'musculoskeletal'
+    }else if (580<=x && x<=629 | x == 788){
+      data$D2[n]<<- 'genitourinary'
+    }else if (140<=x && x<=239){
+      data$D2[n]<<- 'neoplasms'
+    }else {
+      data$D2[n]<<- 'other'
+    }
+  }
+}
+data$diag_3<- as.numeric(data$diag_3)
+populate3 <- function(data){
+  for (n in 1:nrow(data)){
+    x<- data$diag_3[n]
+    if (390<=x && x<=459 | x == 785 ){
+      data$D3[n]<<- 'circulatory'
+    }else if (460<=x && x<=519 | x == 786 ){
+      data$D3[n]<<- 'respiratory'
+    }else if (520<=x && x<=579 | x == 787 ){
+      data$D3[n]<<- 'digestive'
+    }else if (250<=x && x<251){
+      data$D3[n]<<- 'diabetes'
+    }else if (800<=x && x<=999){
+      data$D3[n]<<- 'injury'
+    }else if (710<=x && x<=739){
+      data$D3[n]<<- 'musculoskeletal'
+    }else if (580<=x && x<=629 | x == 788){
+      data$D3[n]<<- 'genitourinary'
+    }else if (140<=x && x<=239){
+      data$D3[n]<<- 'neoplasms'
+    }else {
+      data$D3[n]<<- 'other'
+    }
+  }
+}
+populate1(data)
+populate2(data)
+populate3(data)
+data$D1<- as.factor(data$D1)
+data$D2<- as.factor(data$D2)
+data$D3<- as.factor(data$D3)
+#Drop original diagnosis columns 
+data<- data[ , -which(names(data) %in% c("diag_1","diag_2","diag_3"))]
+```
+
+I converted these three integer identified variables to factors as they should be considered categorical data. 
+```{r}
+data$admission_type_id<- as.factor(data$admission_type_id)
+data$discharge_disposition_id<- as.factor(data$discharge_disposition_id)
+data$admission_source_id<- as.factor(data$admission_source_id)
+```
+
+Next I split the data into training and testing sets using the caret package. I decided to split 80:20 and then created subsets for quantitative and categorical data in order to use the appropriate clustering methods effectively. 
+```{r}
+## Split into Train and Test sets 
+trainIndex <- createDataPartition(data$classifier, p = .8, list = FALSE, times = 1)
+train <- data[trainIndex, ]
+test  <- data[-trainIndex, ]
+
+#Quantitative and Qualititave Data subsets 
+quant <- select_if(train, is.numeric) 
+classifier<- train$classifier
+quant_class<- as.numeric(classifier)
+quant<- cbind(quant, quant_class) #8 features +classifier
+qual <- select_if(train, is.factor) #36 features + classifier
+all_vars<- train[ ,-which(names(train) %in% "classifier")] #44 features
+```
+
+
+
+## Classification
+
+The first classification method I chose to run was Random Forest. Because the majority of the features are categorical data, classification models are limited as they work best with numerical data. Random Forest is one of the few methods that works with both types of data and was used to select the important features when predicting readmittance. 
+```{r}
+## Feature Selection via Random Forest.... takes about 34 minutes 
+RF<- randomForest(formula = train$classifier ~ ., data = train[ ,!names(train) %in% "classifier"], importance = TRUE)
+RF 
+varImpPlot(RF, main= "Variable Importance")
+importanceOrder<-order(-RF$importance)
+names<-rownames(RF$importance)[importanceOrder]
+important_order<- na.omit(names)
+top_features<- important_order[1:15] #took top 15 features based on both the MeanDecreaseAccuracy and MeanDecreaseGini charts (no D2,D3)
+top_features_df<- train[,names(train) %in% top_features] 
+str(top_features_df) #7 qualitative and 8 quantitative features 
+new_data<- cbind(top_features_df, classifier)
+```
+
+I then decided to run a Naive Bayes model to view the narrowed down features from the random forest. This is another model that works with both categorical and numerical data. 
+```{r}
+NB_model <- naiveBayes(classifier ~ ., data = new_data[ ,!names(new_data) %in% "classifier"])
+NB_model #probabilites for qualitative and mean/sd for quantitative 
+```
+
+After evaluating the NB_model, I realized the two categorical variables that seem significant are insulin and diabetesMed because the probabilities of predicting each class were higher in these than every other feature. 
+```{r}
+reduced_model<- new_data[5:14]
+final_model<- naiveBayes(classifier ~ ., data = reduced_model[ ,!names(reduced_model) %in% "classifier"])
+```
+
+I decided to perform logistic regression in order to better understand how each feature affects readmittance.
+```{r}
+## Logistic Regression 
+log_model<- glm(classifier~., family=binomial(link= 'logit'), data=reduced_model[, !names(reduced_model) %in% "classifier"])
+summary(log_model) #num_medications is not statistically significant
+```
+The number of procedures and low to no insulin level negatively impact readmittance while all other features positively impact patient readmittance. 
+
+
+I created dummy variables for both categorical variables in the reduced model in order to use more classification algorithms and clustering methods. 
+```{r}
+# Create dummy variables for insulin and diabetesMed
+reduced_model_with_dummies<- dummy.data.frame(reduced_model, sep = ".")
+reduced_model_with_classifier<- cbind(reduced_model_with_dummies, classifier)
+```
+
+I created a correlation plot with the 10 reduced features. The features are ordered hieararchical clustering order. 
+```{r}
+corrplot(cor(reduced_model_with_dummies), order = "hclust")
+
+## Linear Regression
+linearMod <- lm(as.numeric(reduced_model_with_classifier$classifier) ~ ., data = reduced_model_with_classifier[ ,!names(reduced_model_with_classifier) %in% "classifier"])
+summary(linearMod)
+```
+According to the linear regression results, number of medications is the only feature that is not statistically significant (out of the numerical features). We notice that the number of inpatient visits has the highest estimated coefficient which is expected because readmission is defined as the number of days to inpatient readmission. 
+
+
+
+## Clustering
+
+I decided to perform k means clustering on the reduced model including the dummy variables I created. K-means is intented for continuos data because it is using a distance metric therefore trying to use categorical data is dangerous. Another type of clustering called K-modes is worth considering in further analysis as it allows for categorical data. I decided to choose k=2 in order to cluster the two different classes in our dataset (readmittance and no readmittance). I also made sure to normalize the data before passing it into the kmeans function. The distance metric I chose is pearson.
+```{r}
+norm_data <- scale(reduced_model_with_dummies, center = TRUE, scale = TRUE)
+clusters_kmean <- Kmeans(norm_data, centers = 2, nstart = 25, method = "pearson", iter.max = 100)
+fviz_cluster(clusters_kmean, data = norm_data, stand = FALSE, geom = "point", 
+             main = "Clustering the patients into 2 groups using Kmeans", palette = "Set2", 
+             ggtheme = theme_minimal())
+```
+The two clusters are pretty clean with little overlapping. This shows that there is a clear distinction in the dataset. 
+
+
+I also performed hierarchical clustering on xx data. The metrics chosen include pearson and complete linkage. The distance measure calculates the distance between rows therefore we want the patients as rows and features as columns. I also provided a heatmap to better visualize the significant levels for each patient and feature. In this diagram, red is considered high values and blue as low values.  
+```{r}
+data_dist <- dist(as.matrix(reduced_model_with_dummies)) 
+hc <- hclust(data_dist, method = "complete")
+my_palette <- colorRampPalette(c("lightyellow", "blue", "red"))(n = 299)
+heatmap3(as.matrix(reduced_model_with_dummies), Rowv=as.dendrogram(hc),
+          labRow =  "",
+          col = my_palette,
+          main = "Clustering the patients on xx numerical variables"
+ )      
+
+```
+
+## Model Metrics 
+I then calculated metrics including: Accuracy, sensitivity, specificity, and F1 scores. I produced an ROC plot and show the area under the curve. 
+```{r}
+x_test<- test[,names(test) %in% reduced_model_names] 
+y_test<- test[, names(test) %in% "classifier"] #actual values
+predictions <- predict(final_model, x_test) #predicted values
+mat<- confusionMatrix(predictions, y_test)
+F_score<- mat$byClass[7]
+roc.val <- predict(forest, test, type='prob')
+plot(roc(test$classifier, roc.val[,2]), col = "orange", print.auc = TRUE, asp = NA, legacy.axes = TRUE)
+```
+Accuracy: ~59% of the patients were correctly predicted whether they were readmitted or not. 
+Specificity: ~91% of the patients that were actually readmitted were predicted to be readmitted. 
+Sensitivity: ~22% of the patients that were not actually readmitted were predicted to not be readmitted. 
+It is important to note that these results are not very favorable as our sensitivity and accuracy scores are pretty low. 
+
+## Model's Feature Visualization Plots
+
+Finally, I plotted comparison histograms to show each class for each of the model's features. Class 1 belongs to patients that were not readmitted and Class 2 belongs to those that were readmitted. 
+```{r}
+#Time in Hospital 
+time_in_hospital_df<- data.frame(cbind(time= new_data$time_in_hospital, class=new_data$classifier))
+time_in_hospital_df<- data.frame(table(time_in_hospital_df))
+time_df<- data.frame(time_in_hospital_df)
+ggplot(data=time_df, aes(x=time, y=Freq, fill=class)) +
+  ggtitle("Comparison of Time in Hospital") + 
+  xlab("Days between Admission and Discharge") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of lab procedures
+num_lab_procedures_df<- data.frame(cbind(procedures= new_data$num_lab_procedures, class=new_data$classifier))
+num_lab_procedures_df<- data.frame(table(num_lab_procedures_df))
+lab_df<- data.frame(num_lab_procedures_df)
+ggplot(data=lab_df, aes(x=procedures, y=Freq, fill=class)) +
+  ggtitle("Comparison of Number of Lab Procedures") + 
+  xlab("Number of lab procedures") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Procedures      
+num_procedures_df<- data.frame(cbind(procedures= new_data$num_procedures, class=new_data$classifier))
+num_procedures_df<- data.frame(table(num_procedures_df))
+proc_df<- data.frame(num_procedures_df)
+ggplot(data=lab_df, aes(x=procedures, y=Freq, fill=class)) +
+  ggtitle("Comparison of Number of Procedures") + 
+  xlab("Number of procedures") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Medications
+meds_df<- data.frame(cbind(meds= new_data$num_medications, class=new_data$classifier))
+meds_df<- data.frame(table(meds_df))
+meds_df<- data.frame(meds_df)
+ggplot(data=meds_df, aes(x=meds, y=Freq, fill=class)) +
+  ggtitle("Comparison of Number of Medications") + 
+  xlab("Number of medications") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Outpatient Visits
+out_df<- data.frame(cbind(out= new_data$number_outpatient, class=new_data$classifier))
+out_df<- data.frame(table(out_df))
+out_df<- data.frame(out_df)
+ggplot(data=out_df, aes(x=out, y=Freq, fill=class)) +
+  ggtitle("Comparison of Outpatient Visits") + 
+  xlab("Number of outpatient visits") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Emergencies
+er_df<- data.frame(cbind(er= new_data$number_emergency, class=new_data$classifier))
+er_df<- data.frame(table(er_df))
+er_df<- data.frame(er_df)
+ggplot(data=er_df, aes(x=er, y=Freq, fill=class)) +
+  ggtitle("Comparison of Number of Emergencies") + 
+  xlab("Number of emergencies") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Inpatient visits
+in_df<- data.frame(cbind(inp= new_data$number_inpatient, class=new_data$classifier))
+in_df<- data.frame(table(in_df))
+in_df<- data.frame(in_df)
+ggplot(data=in_df, aes(x=inp, y=Freq, fill=class)) +
+  ggtitle("Comparison of Inpatient Visits") + 
+  xlab("Number of inpatient visits") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Number of Diagnoses
+diag_df<- data.frame(cbind(diag= new_data$number_diagnoses, class=new_data$classifier))
+diag_df<- data.frame(table(diag_df))
+diag_df<- data.frame(diag_df)
+ggplot(data=diag_df, aes(x=diag, y=Freq, fill=class)) +
+  ggtitle("Comparison of Number of Diagnoses") + 
+  xlab("Number of diagnoses") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Insulin 
+insulin_df<- data.frame(cbind(insulin= new_data$insulin, class=new_data$classifier))
+insulin_df<- data.frame(table(insulin_df))
+insulin_df<- data.frame(insulin_df)
+ggplot(data=insulin_df, aes(x=insulin, y=Freq, fill=class)) +
+  ggtitle("Comparison of Insulin Levels") + 
+  xlab("Insulin Levels") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+#Diabetes Med
+diab_df<- data.frame(cbind(med= new_data$diabetesMed, class=new_data$classifier))
+diab_df<- data.frame(table(diab_df))
+diab_df<- data.frame(diab_df)
+ggplot(data=diab_df, aes(x=med, y=Freq, fill=class)) +
+  ggtitle("Comparison of Patients Receiving Diabetes Medication") + 
+  xlab("Medication or No Medication") + 
+  geom_bar(stat="identity", position=position_dodge())
+
+```
+
+
+
